@@ -4,7 +4,9 @@ Task lists on your Solid pod. Optional (install from the store), not a default a
 
 Same functionality as the SolidOS todo — **multiple lists**, add / complete /
 edit / delete, **filter** (All / Active / Done), and **Move to…** a task between
-lists — with a purple skin, built on the **`wf:Tracker` data model** so it
+lists — plus **Import** lists from another pod (normalizes both the losos
+`schema:ItemList` and `wf:Tracker` shapes; public, reachable sources) — with a
+purple skin, built on the **`wf:Tracker` data model** so it
 **interoperates with [pilot](https://github.com/solid-apps/pilot)** and your
 existing trackers (not a new silo).
 

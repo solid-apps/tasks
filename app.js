@@ -57,6 +57,70 @@ function newIssue(text, doc) {
   return { '@id': '#Iss' + Date.now(), '@type': issuesOf(doc)[0]?.['@type'] || 'Vtodo', summary: text, status: doc.initialState || 'NEEDS-ACTION', created: nowIso(), modified: nowIso() }
 }
 
+// --- import from another pod -----------------------------------------------
+// Reads a source URL (a single list, a lists index, or a container), normalizes
+// the losos schema:ItemList AND wf:Tracker shapes into our wf:Tracker, and
+// writes each into this pod's /public/tracker/ (snapshot copy; public sources).
+const sList = (d) => Array.isArray(d) ? d : (d ? [d] : [])
+async function fetchJson(url) {
+  const r = await fetch(url, { headers: { Accept: 'application/ld+json' } })  // cross-origin, public
+  if (!r.ok) throw new Error(`fetch ${url.split('/').pop()} → ${r.status}`)
+  return r.json()
+}
+const srcItems = (doc) => doc.issue ? issuesOf(doc) : sList(doc['schema:itemListElement'] || doc.itemListElement || doc['https://schema.org/itemListElement'])
+const srcTitle = (doc, fb) => doc.title || doc['dct:title'] || doc['schema:name'] || doc.name || doc['http://purl.org/dc/terms/title'] || fb || 'Imported'
+const itemText = (it) => it.summary || it['schema:name'] || it.name || it['ical:summary'] || it['http://schema.org/name'] || '(untitled)'
+const itemDone = (it) => ('' + (it.status || it['schema:status'] || it['ical:status'] || '')).toUpperCase().includes('COMPLETED')
+const itemCreated = (it) => it.created || it['schema:dateCreated'] || it.dateCreated || it['dct:created'] || nowIso()
+
+function toTracker(srcDoc, title) {
+  const issue = srcItems(srcDoc).map((it, i) => ({
+    '@id': '#Iss' + (Date.now() + i), '@type': 'Vtodo',
+    summary: '' + itemText(it), status: itemDone(it) ? 'COMPLETED' : 'NEEDS-ACTION',
+    created: '' + itemCreated(it), modified: nowIso()
+  }))
+  return { '@context': CONTEXT, '@id': '#this', '@type': 'Tracker', title, created: nowIso(), initialState: 'NEEDS-ACTION', issue }
+}
+
+async function collectLists(srcUrl, doc) {
+  const parts = sList(doc['schema:hasPart'] || doc.hasPart)  // a lists index (CollectionPage)
+  if (parts.length) {
+    const out = []
+    for (const p of parts) {
+      const u = ((p['@id'] || p.id || '').split('#')[0]) || (p['schema:url'] || p.url ? new URL(p['schema:url'] || p.url, srcUrl).href : '')
+      if (!u) continue
+      try { out.push({ title: p['schema:name'] || p.name, doc: await fetchJson(u) }) } catch { /* skip */ }
+    }
+    return out
+  }
+  if (doc['ldp:contains'] || doc['http://www.w3.org/ns/ldp#contains'] || doc.contains) {  // a container
+    const out = []
+    for (const u of ldpContains(doc).map((x) => new URL(x, srcUrl).href).filter((x) => x.endsWith('.jsonld'))) {
+      try { out.push({ title: null, doc: await fetchJson(u) }) } catch { /* skip */ }
+    }
+    return out
+  }
+  return [{ title: null, doc }]  // a single list
+}
+
+const slugify = (s) => ('' + (s || 'imported')).toLowerCase().replace(/[^\w-]+/g, '-').replace(/^-+|-+$/g, '') || 'imported'
+function uniqueSlug(base, taken) { let s = base, i = 2; while (taken.has(s)) s = `${base}-${i++}`; return s }
+
+async function importFrom(srcUrl) {
+  const clean = srcUrl.replace(/#.*$/, '')
+  const lists = await collectLists(clean, await fetchJson(clean))
+  const taken = new Set((await listTrackers()).map((t) => t.url.split('/').pop().replace(/-data\.jsonld$/, '')))
+  let nLists = 0, nTasks = 0
+  for (const l of lists) {
+    const title = srcTitle(l.doc, l.title)
+    const tracker = toTracker(l.doc, title)
+    const slug = uniqueSlug(slugify(title), taken); taken.add(slug)
+    await saveDoc(new URL(slug + '-data.jsonld', TRACKERS).href, tracker)
+    nLists++; nTasks += tracker.issue.length
+  }
+  return { lists: nLists, tasks: nTasks }
+}
+
 // --- state ---
 let ALL = []        // [{url, doc}] — all lists, for the picker + move targets
 let OPEN = null     // current list url
@@ -81,11 +145,18 @@ async function renderLists() {
   appEl.innerHTML = `
     <h1>Tasks</h1>
     <p class="sub">${ALL.length} list${ALL.length === 1 ? '' : 's'}</p>
-    <div class="toolbar"><button class="new">+ New list</button></div>
+    <div class="toolbar"><button class="new">+ New list</button><button class="imp ghost">Import…</button></div>
     <div class="lists"></div>`
   appEl.querySelector('.new').onclick = async () => {
     const name = prompt('New list name?'); if (!name) return
     try { OPEN = await createTracker(name); DOC = null; render() } catch (e) { toast(String(e.message || e)) }
+  }
+  appEl.querySelector('.imp').onclick = async () => {
+    const url = prompt('Import lists from another pod.\nPaste a URL to a list, a lists index, or a /todo/ or /public/tracker/ container:')
+    if (!url) return
+    toast('Importing…')
+    try { const r = await importFrom(url.trim()); toast(`Imported ${r.lists} list${r.lists === 1 ? '' : 's'} · ${r.tasks} tasks`); render() }
+    catch (e) { toast('Import failed: ' + (e.message || e)) }
   }
   const list = appEl.querySelector('.lists')
   if (!ALL.length) { list.innerHTML = '<p class="muted">No lists yet — create one.</p>'; return }
