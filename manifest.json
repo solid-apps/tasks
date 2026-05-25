@@ -1,0 +1,13 @@
+{
+  "name": "tasks — your Solid pod",
+  "short_name": "tasks",
+  "description": "Task lists on your pod (SolidOS wf:Tracker model, pilot-compatible).",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f3f0ff",
+  "theme_color": "#7c4dff",
+  "icons": [
+    { "src": "favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
