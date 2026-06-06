@@ -46,6 +46,7 @@ async function saveDoc(url, doc) {
     r = await put()
   }
   if (!r.ok) throw new Error(`save failed (${r.status})`)
+  markSelfWrite(url)
 }
 async function createTracker(name) {
   const slug = name.toLowerCase().replace(/[^\w-]+/g, '-').replace(/^-+|-+$/g, '') || 'list'
@@ -137,6 +138,7 @@ async function render() {
   if (!loggedIn()) { appEl.innerHTML = '<h1>Tasks</h1><div class="signin-note">Sign in (login pill, bottom-right) to read and edit your lists.</div>'; return }
   if (OPEN) await renderTasks()
   else await renderLists()
+  syncSubs()
 }
 
 async function renderLists() {
@@ -234,6 +236,52 @@ async function moveItem(item, targetUrl) {
   } catch (e) { toast(String(e.message || e)); DOC = await loadDoc(OPEN); renderTasks() }
 }
 
+// --- live updates: Solid WebSocket notifications (solid-0.1) ----------------
+// When another client (e.g. an AI agent writing to the pod) changes a tracker,
+// the pod pushes `pub <uri>` over ws://<pod>/.notifications; we reload the
+// affected view in place — no manual refresh. Tracker data is public, so the
+// browser WS (which can't send an auth header) subscribes fine.
+const SELF_WRITES = {}                          // url -> ts; ignore our own write-echo
+let LIVE = null, SUBBED = new Set()
+const liveHref = (u) => (typeof u === 'string' ? u : u.href)
+function markSelfWrite(url) { SELF_WRITES[liveHref(url)] = Date.now() }
+function wsEndpoint() { return (location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host + '/.notifications' }
+function liveSub(u) { const url = liveHref(u); if (!LIVE || LIVE.readyState !== 1 || SUBBED.has(url)) return; LIVE.send('sub ' + url); SUBBED.add(url) }
+function liveUnsub(u) { const url = liveHref(u); if (!LIVE || LIVE.readyState !== 1 || !SUBBED.has(url)) return; LIVE.send('unsub ' + url); SUBBED.delete(url) }
+function syncSubs() {
+  if (!LIVE || LIVE.readyState !== 1) return
+  liveSub(TRACKERS)                             // always watch the list of lists
+  const open = OPEN ? liveHref(OPEN) : null
+  for (const u of [...SUBBED]) if (u !== liveHref(TRACKERS) && u !== open) liveUnsub(u)
+  if (open) liveSub(open)                        // and the open list's doc
+}
+function onPub(uri) {
+  if (SELF_WRITES[uri] && Date.now() - SELF_WRITES[uri] < 2500) return   // our own write
+  if (OPEN && uri === liveHref(OPEN)) reloadOpen()
+  else if (uri === liveHref(TRACKERS) && !OPEN) renderLists()
+}
+async function reloadOpen() {
+  const at = OPEN
+  const fresh = await loadDoc(at)
+  if (!fresh || OPEN !== at) return             // navigated away while loading
+  DOC = fresh
+  const c = ALL.find((t) => t.url === at); if (c) c.doc = fresh
+  const inp = appEl.querySelector('.add-task'); const kept = inp ? inp.value : null
+  const had = inp && document.activeElement === inp
+  await renderTasks()
+  if (kept != null) { const ni = appEl.querySelector('.add-task'); if (ni) { ni.value = kept; if (had) { ni.focus(); ni.selectionStart = ni.selectionEnd = kept.length } } }
+}
+function connectLive() {
+  let ws
+  try { ws = new WebSocket(wsEndpoint()) } catch { return }
+  LIVE = ws
+  ws.onopen = () => { SUBBED = new Set(); syncSubs() }
+  ws.onmessage = (e) => { const m = String(e.data || ''); if (m.startsWith('pub ')) onPub(m.slice(4).trim()) }
+  ws.onerror = () => { try { ws.close() } catch { /* noop */ } }
+  ws.onclose = () => { LIVE = null; SUBBED = new Set(); setTimeout(connectLive, 3000) }
+}
+
+connectLive()
 render()
 document.addEventListener('xlogin', render)
 document.addEventListener('xlogout', render)
