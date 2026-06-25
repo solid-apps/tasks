@@ -50,8 +50,8 @@ input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px 
 .issue.done .check { background: var(--accent); border-color: var(--accent); }
 .issue .summary { flex: 1; cursor: text; word-break: break-word; }
 .issue.done .summary { text-decoration: line-through; color: var(--muted); }
-.issue .mv, .issue .x { border: 0; background: transparent; color: var(--muted); padding: 0 5px; font-size: 17px; line-height: 1; }
-.issue .mv:hover { color: var(--accent); } .issue .x:hover { color: var(--danger); }
+.issue .top, .issue .mv, .issue .x { border: 0; background: transparent; color: var(--muted); padding: 0 5px; font-size: 17px; line-height: 1; }
+.issue .top:hover, .issue .mv:hover { color: var(--accent); } .issue .x:hover { color: var(--danger); }
 
 .move-overlay { position: fixed; inset: 0; background: rgba(40,25,80,.45); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 50; }
 .move-modal { background: rgba(255,255,255,.92); backdrop-filter: blur(20px); border: 1px solid var(--border); border-radius: 16px; padding: 16px; width: 100%; max-width: 320px; box-shadow: 0 20px 50px rgba(40,25,80,.3); }

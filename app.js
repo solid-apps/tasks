@@ -211,9 +211,10 @@ async function renderTasks() {
     const el = document.createElement('div')
     el.className = 'issue' + (isDone(it) ? ' done' : '')
     el.innerHTML = `<span class="check">${isDone(it) ? '✓' : ''}</span><span class="summary">${esc(it.summary || '')}</span>
-      <button class="mv ghost" title="Move to another list">→</button><button class="x ghost" title="Delete">×</button>`
+      <button class="top ghost" title="Move to top">↑</button><button class="mv ghost" title="Move to another list">→</button><button class="x ghost" title="Delete">×</button>`
     el.querySelector('.check').onclick = async () => { it.status = isDone(it) ? 'NEEDS-ACTION' : 'COMPLETED'; it.modified = nowIso(); await save(); renderTasks() }
     el.querySelector('.summary').onclick = async () => { const v = prompt('Edit task', it.summary); if (v == null) return; it.summary = v.trim(); it.modified = nowIso(); await save(); renderTasks() }
+    el.querySelector('.top').onclick = async () => { DOC.issue = [...issues.filter((x) => x['@id'] !== it['@id']), it]; it.modified = nowIso(); await save(); renderTasks() }
     el.querySelector('.x').onclick = async () => { DOC.issue = issues.filter((x) => x['@id'] !== it['@id']); await save(); renderTasks() }
     el.querySelector('.mv').onclick = () => moveDialog(it)
     box.appendChild(el)
