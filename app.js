@@ -194,7 +194,7 @@ async function renderTasks() {
   appEl.querySelector('.add-btn').onclick = add
   input.onkeydown = (e) => { if (e.key === 'Enter') add() }
 
-  const shown = FILTER === 'all' ? issues : issues.filter((i) => FILTER === 'done' ? isDone(i) : !isDone(i))
+  const shown = (FILTER === 'all' ? issues : issues.filter((i) => FILTER === 'done' ? isDone(i) : !isDone(i))).slice().reverse()
   const box = appEl.querySelector('.issues')
   if (!shown.length) { box.innerHTML = `<p class="muted">${counts.all ? 'Nothing here.' : 'No tasks yet. Add one above.'}</p>`; return }
   shown.forEach((it) => {
