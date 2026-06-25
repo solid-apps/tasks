@@ -126,7 +126,7 @@ async function importFrom(srcUrl) {
 let ALL = []        // [{url, doc}] — all lists, for the picker + move targets
 let OPEN = null     // current list url
 let DOC = null      // current list doc (optimistic)
-let FILTER = 'all'  // all | active | done
+let FILTER = localStorage.getItem('filter') || 'all'  // all | active | done
 
 function toast(msg) {
   let t = document.querySelector('.toast')
@@ -167,7 +167,7 @@ async function renderLists() {
     const row = document.createElement('div')
     row.className = 'card listrow'
     row.innerHTML = `<span class="l-name">${esc(t.doc.title || t.url.split('/').pop())}</span><span class="l-count">${open}</span>`
-    row.onclick = () => { OPEN = t.url; DOC = t.doc; FILTER = 'all'; render() }
+    row.onclick = () => { OPEN = t.url; DOC = t.doc; render() }
     list.appendChild(row)
   })
 }
@@ -187,7 +187,7 @@ async function renderTasks() {
     </div>
     <div class="issues"></div>`
   appEl.querySelector('.back').onclick = () => { OPEN = null; DOC = null; render() }
-  appEl.querySelectorAll('.filter').forEach((b) => { b.onclick = () => { FILTER = b.dataset.f; renderTasks() } })
+  appEl.querySelectorAll('.filter').forEach((b) => { b.onclick = () => { FILTER = b.dataset.f; localStorage.setItem('filter', FILTER); renderTasks() } })
 
   const input = appEl.querySelector('.add-task')
   const add = async () => { const v = input.value.trim(); if (!v) return; DOC.issue = [...issues, newIssue(v, DOC)]; input.value = ''; await save(); renderTasks() }
