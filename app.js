@@ -134,6 +134,15 @@ function toast(msg) {
   t.textContent = msg; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 2200)
 }
 
+const trackerRel = (u) => (u && u.startsWith(TRACKERS.href) ? u.slice(TRACKERS.href.length) : u)  // store short, pod-relative
+const trackerAbs = (p) => (p ? new URL(p, TRACKERS).href : null)
+function trackerFromUrl() { return trackerAbs(new URLSearchParams(location.search).get('tracker')) }
+function openTracker(url, doc) {
+  OPEN = url; DOC = doc || null
+  history.pushState({}, '', url ? '?tracker=' + encodeURIComponent(trackerRel(url)) : location.pathname)
+  render()
+}
+
 async function render() {
   if (!loggedIn()) { appEl.innerHTML = '<h1>Tasks</h1><div class="signin-note">Sign in (login pill, bottom-right) to read and edit your lists.</div>'; return }
   if (OPEN) await renderTasks()
@@ -151,7 +160,7 @@ async function renderLists() {
     <div class="lists"></div>`
   appEl.querySelector('.new').onclick = async () => {
     const name = prompt('New list name?'); if (!name) return
-    try { OPEN = await createTracker(name); DOC = null; render() } catch (e) { toast(String(e.message || e)) }
+    try { openTracker(await createTracker(name), null) } catch (e) { toast(String(e.message || e)) }
   }
   appEl.querySelector('.imp').onclick = async () => {
     const url = prompt('Import lists from another pod.\nPaste a URL to a list, a lists index, or a /todo/ or /public/tracker/ container:')
@@ -167,7 +176,7 @@ async function renderLists() {
     const row = document.createElement('div')
     row.className = 'card listrow'
     row.innerHTML = `<span class="l-name">${esc(t.doc.title || t.url.split('/').pop())}</span><span class="l-count">${open}</span>`
-    row.onclick = () => { OPEN = t.url; DOC = t.doc; render() }
+    row.onclick = () => openTracker(t.url, t.doc)
     list.appendChild(row)
   })
 }
@@ -175,6 +184,7 @@ async function renderLists() {
 async function renderTasks() {
   if (!DOC) DOC = await loadDoc(OPEN)
   if (!DOC) { appEl.innerHTML = '<h1>Tasks</h1><p class="muted">Could not load list.</p>'; OPEN = null; return }
+  if (!ALL.length) listTrackers().then((a) => { ALL = a }).catch(() => {})  // deep-link: populate move targets in bg
   const issues = issuesOf(DOC)
   const counts = { all: issues.length, active: issues.filter((i) => !isDone(i)).length, done: issues.filter(isDone).length }
   const save = async () => { try { await saveDoc(OPEN, DOC); const c = ALL.find((t) => t.url === OPEN); if (c) c.doc = DOC } catch (e) { toast(String(e.message || e)) } }
@@ -186,7 +196,7 @@ async function renderTasks() {
       ${['all', 'active', 'done'].map((f) => `<button class="filter ${FILTER === f ? 'active' : ''}" data-f="${f}">${f[0].toUpperCase() + f.slice(1)} <span class="fc">${counts[f]}</span></button>`).join('')}
     </div>
     <div class="issues"></div>`
-  appEl.querySelector('.back').onclick = () => { OPEN = null; DOC = null; render() }
+  appEl.querySelector('.back').onclick = () => openTracker(null)
   appEl.querySelectorAll('.filter').forEach((b) => { b.onclick = () => { FILTER = b.dataset.f; localStorage.setItem('filter', FILTER); renderTasks() } })
 
   const input = appEl.querySelector('.add-task')
@@ -282,6 +292,8 @@ function connectLive() {
 }
 
 connectLive()
+OPEN = trackerFromUrl()
 render()
+window.addEventListener('popstate', () => { OPEN = trackerFromUrl(); DOC = null; render() })
 document.addEventListener('xlogin', render)
 document.addEventListener('xlogout', render)
