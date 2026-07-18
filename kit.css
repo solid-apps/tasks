@@ -1,0 +1,52 @@
+/* SolidKit v1.0 — safety layer only. No palette, no typography, no layout:
+ * light apps stay light, dark apps stay dark. Load BEFORE the app's own
+ * style.css so an app can still override anything here.
+ * Canonical copy: solid-apps.github.io/kit/kit.css (vendor per app). */
+
+/* The hidden attribute always wins. Half the estate had `display:flex`
+ * rules silently defeating [hidden] — ghost panels, signed-out composers. */
+[hidden] { display: none !important; }
+
+/* Keyboard users always get a focus ring. currentColor keeps it legible on
+ * any background without imposing an accent. Apps with their own richer
+ * :focus-visible rules override this by specificity or order. */
+:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+:focus:not(:focus-visible) { outline: none; }
+
+/* Respect reduced-motion globally. Gameplay animations that must run can
+ * opt out with .sk-motion-ok. */
+@media (prefers-reduced-motion: reduce) {
+  *:not(.sk-motion-ok),
+  *:not(.sk-motion-ok)::before,
+  *:not(.sk-motion-ok)::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Long unbroken identifiers (WebIDs, npubs, URLs) may wrap anywhere when a
+ * container opts in — shared utility so apps stop re-inventing it. */
+.sk-wrap-any { overflow-wrap: anywhere; min-width: 0; }
+
+/* Single-line ellipsis truncation utility (pair with a title attribute). */
+.sk-ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* Screen-reader-only text. */
+.sk-visually-hidden {
+  position: absolute !important;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0;
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}

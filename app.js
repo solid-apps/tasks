@@ -9,7 +9,7 @@ const TRACKERS = new URL('../../tracker/', location.href) // <pod>/public/tracke
 
 const authFetch = (url, opts) => ((window.xlogin && window.xlogin.authFetch) || fetch)(url, opts)
 const loggedIn = () => !!(window.xlogin && window.xlogin.id)
-const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+const esc = window.SolidKit.esc  // kit: also covers ' — identical rendering, safe in attr context
 const nowIso = () => new Date().toISOString()
 
 const CONTEXT = {
@@ -27,10 +27,10 @@ function ldpContains(doc) {
 
 // --- pod I/O ---
 async function listTrackers() {
-  const r = await authFetch(TRACKERS, { headers: { Accept: 'application/ld+json' } })
-  if (r.status === 404) return []               // container not created yet — genuinely no lists
-  if (!r.ok) throw new Error(`couldn't load lists (${r.status})`)  // don't mistake failure for "no lists"
-  const urls = ldpContains(await r.json()).map((u) => new URL(u, TRACKERS).href).filter((u) => u.endsWith('.jsonld'))
+  const r = await window.SolidKit.loadJson(authFetch, TRACKERS.href, { headers: { Accept: 'application/ld+json' } })
+  if (r.missing) return []                      // container not created yet — genuinely no lists
+  if (!r.ok) throw (r.status >= 400 ? new Error(`couldn't load lists (${r.status})`) : r.error)  // don't mistake failure for "no lists"
+  const urls = ldpContains(r.data).map((u) => new URL(u, TRACKERS).href).filter((u) => u.endsWith('.jsonld'))
   const out = []
   for (const u of urls) {
     try { const dr = await authFetch(u, { headers: { Accept: 'application/ld+json' } }); if (dr.ok) out.push({ url: u, doc: await dr.json() }) } catch { /* skip */ }
@@ -129,13 +129,19 @@ let OPEN = null     // current list url
 let DOC = null      // current list doc (optimistic)
 let FILTER = localStorage.getItem('filter') || 'all'  // all | active | done
 
-let TOAST_T = null
-function toast(msg) {
-  let t = document.querySelector('.toast')
-  if (!t) { t = document.createElement('div'); t.className = 'toast'; document.body.appendChild(t) }
-  t.textContent = msg; t.classList.add('show')
-  clearTimeout(TOAST_T); TOAST_T = setTimeout(() => t.classList.remove('show'), 2200)  // don't let an old timer hide a newer toast
-}
+// SolidKit.toaster owns the timer (an old timer never hides a newer toast);
+// visuals stay ours: same .toast element, .show class, 2200ms hold.
+const toast = (() => {
+  let show = null
+  return (msg) => {
+    if (!show) {
+      let t = document.querySelector('.toast')
+      if (!t) { t = document.createElement('div'); t.className = 'toast'; document.body.appendChild(t) }
+      show = window.SolidKit.toaster(t, 'show')
+    }
+    show(msg, { ms: 2200 })
+  }
+})()
 
 const trackerRel = (u) => (u && u.startsWith(TRACKERS.href) ? u.slice(TRACKERS.href.length) : u)  // store short, pod-relative
 const trackerAbs = (p) => (p ? new URL(p, TRACKERS).href : null)
@@ -150,7 +156,7 @@ async function render() {
   if (!loggedIn()) { appEl.innerHTML = '<h1>Tasks</h1><div class="signin-note">Sign in (login pill, bottom-right) to read and edit your lists.</div>'; return }
   if (OPEN) await renderTasks()
   else await renderLists()
-  syncSubs()
+  syncLive()
 }
 
 async function renderLists() {
@@ -265,29 +271,34 @@ async function moveItem(item, targetUrl) {
   } catch (e) { toast(String(e.message || e)); DOC = (await loadDoc(OPEN).catch(() => null)) || DOC; renderTasks() }
 }
 
-// --- live updates: Solid WebSocket notifications (solid-0.1) ----------------
+// --- live updates: SolidKit Updates-Via subscription (solid-0.1) -------------
 // When another client (e.g. an AI agent writing to the pod) changes a tracker,
-// the pod pushes `pub <uri>` over ws://<pod>/.notifications; we reload the
-// affected view in place — no manual refresh. Tracker data is public, so the
-// browser WS (which can't send an auth header) subscribes fine.
+// the pod pushes `pub <uri>` over its Updates-Via WebSocket; we reload the
+// affected view in place — no manual refresh. Exactly one live subscription at
+// a time: the open list's doc, or the tracker container on the lists view.
+// SolidKit.subscribe owns the socket (reconnect, backoff, resubscribe); a pod
+// without Updates-Via just runs without live sync.
 const SELF_WRITES = {}                          // url -> ts; ignore our own write-echo
-let LIVE = null, SUBBED = new Set()
 const liveHref = (u) => (typeof u === 'string' ? u : u.href)
 function markSelfWrite(url) { SELF_WRITES[liveHref(url)] = Date.now() }
-function wsEndpoint() { return (location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host + '/.notifications' }
-function liveSub(u) { const url = liveHref(u); if (!LIVE || LIVE.readyState !== 1 || SUBBED.has(url)) return; LIVE.send('sub ' + url); SUBBED.add(url) }
-function liveUnsub(u) { const url = liveHref(u); if (!LIVE || LIVE.readyState !== 1 || !SUBBED.has(url)) return; LIVE.send('unsub ' + url); SUBBED.delete(url) }
-function syncSubs() {
-  if (!LIVE || LIVE.readyState !== 1) return
-  liveSub(TRACKERS)                             // always watch the list of lists
-  const open = OPEN ? liveHref(OPEN) : null
-  for (const u of [...SUBBED]) if (u !== liveHref(TRACKERS) && u !== open) liveUnsub(u)
-  if (open) liveSub(open)                        // and the open list's doc
+let LIVE_UNSUB = null, LIVE_URL = null, LIVE_SEQ = 0
+function syncLive() {
+  const want = OPEN ? liveHref(OPEN) : TRACKERS.href
+  if (want === LIVE_URL) return                 // already live (or pending) — never double-subscribe
+  if (LIVE_UNSUB) { LIVE_UNSUB(); LIVE_UNSUB = null }
+  LIVE_URL = want
+  const seq = ++LIVE_SEQ
+  window.SolidKit.subscribe(want, () => onPub(want), { fetch: authFetch })
+    .then((unsub) => {
+      if (seq !== LIVE_SEQ) { unsub(); return }  // superseded while the HEAD was in flight
+      LIVE_UNSUB = unsub
+    })
+    .catch(() => { if (seq === LIVE_SEQ) LIVE_URL = null })  // no Updates-Via — run without live sync
 }
 function onPub(uri) {
   if (SELF_WRITES[uri] && Date.now() - SELF_WRITES[uri] < 2500) return   // our own write
   if (OPEN && uri === liveHref(OPEN)) reloadOpen()
-  else if (uri === liveHref(TRACKERS) && !OPEN) renderLists()
+  else if (uri === TRACKERS.href && !OPEN) renderLists()
 }
 async function reloadOpen() {
   const at = OPEN
@@ -300,17 +311,6 @@ async function reloadOpen() {
   await renderTasks()
   if (kept != null) { const ni = appEl.querySelector('.add-task'); if (ni) { ni.value = kept; if (had) { ni.focus(); ni.selectionStart = ni.selectionEnd = kept.length } } }
 }
-function connectLive() {
-  let ws
-  try { ws = new WebSocket(wsEndpoint()) } catch { return }
-  LIVE = ws
-  ws.onopen = () => { SUBBED = new Set(); syncSubs() }
-  ws.onmessage = (e) => { const m = String(e.data || ''); if (m.startsWith('pub ')) onPub(m.slice(4).trim()) }
-  ws.onerror = () => { try { ws.close() } catch { /* noop */ } }
-  ws.onclose = () => { LIVE = null; SUBBED = new Set(); setTimeout(connectLive, 3000) }
-}
-
-connectLive()
 OPEN = trackerFromUrl()
 render()
 window.addEventListener('popstate', () => { OPEN = trackerFromUrl(); DOC = null; render() })
