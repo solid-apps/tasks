@@ -28,7 +28,8 @@ function ldpContains(doc) {
 // --- pod I/O ---
 async function listTrackers() {
   const r = await authFetch(TRACKERS, { headers: { Accept: 'application/ld+json' } })
-  if (!r.ok) return []
+  if (r.status === 404) return []               // container not created yet — genuinely no lists
+  if (!r.ok) throw new Error(`couldn't load lists (${r.status})`)  // don't mistake failure for "no lists"
   const urls = ldpContains(await r.json()).map((u) => new URL(u, TRACKERS).href).filter((u) => u.endsWith('.jsonld'))
   const out = []
   for (const u of urls) {
@@ -128,10 +129,12 @@ let OPEN = null     // current list url
 let DOC = null      // current list doc (optimistic)
 let FILTER = localStorage.getItem('filter') || 'all'  // all | active | done
 
+let TOAST_T = null
 function toast(msg) {
   let t = document.querySelector('.toast')
   if (!t) { t = document.createElement('div'); t.className = 'toast'; document.body.appendChild(t) }
-  t.textContent = msg; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 2200)
+  t.textContent = msg; t.classList.add('show')
+  clearTimeout(TOAST_T); TOAST_T = setTimeout(() => t.classList.remove('show'), 2200)  // don't let an old timer hide a newer toast
 }
 
 const trackerRel = (u) => (u && u.startsWith(TRACKERS.href) ? u.slice(TRACKERS.href.length) : u)  // store short, pod-relative
@@ -152,7 +155,11 @@ async function render() {
 
 async function renderLists() {
   appEl.innerHTML = '<h1>Tasks</h1><p class="sub muted">Loading…</p>'
-  try { ALL = await listTrackers() } catch { ALL = [] }
+  try { ALL = await listTrackers() } catch (e) {
+    appEl.innerHTML = `<h1>Tasks</h1><p class="sub error">${esc(String(e.message || e))}</p><div class="toolbar"><button class="retry">Retry</button></div>`
+    appEl.querySelector('.retry').onclick = () => renderLists()
+    return
+  }
   appEl.innerHTML = `
     <h1>Tasks</h1>
     <p class="sub">${ALL.length} list${ALL.length === 1 ? '' : 's'}</p>
@@ -175,14 +182,19 @@ async function renderLists() {
     const open = issuesOf(t.doc).filter((i) => !isDone(i)).length
     const row = document.createElement('div')
     row.className = 'card listrow'
+    row.tabIndex = 0; row.setAttribute('role', 'button')
     row.innerHTML = `<span class="l-name">${esc(t.doc.title || t.url.split('/').pop())}</span><span class="l-count">${open}</span>`
     row.onclick = () => openTracker(t.url, t.doc)
+    row.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openTracker(t.url, t.doc) } }
     list.appendChild(row)
   })
 }
 
 async function renderTasks() {
-  if (!DOC) DOC = await loadDoc(OPEN)
+  if (!DOC) {
+    appEl.innerHTML = '<h1>Tasks</h1><p class="sub muted">Loading…</p>'
+    try { DOC = await loadDoc(OPEN) } catch { DOC = null }
+  }
   if (!DOC) { appEl.innerHTML = '<h1>Tasks</h1><p class="muted">Could not load list.</p>'; OPEN = null; return }
   if (!ALL.length) listTrackers().then((a) => { ALL = a }).catch(() => {})  // deep-link: populate move targets in bg
   const issues = issuesOf(DOC)
@@ -230,21 +242,27 @@ function moveDialog(item) {
     ? targets.map((t) => `<button class="move-opt" data-url="${esc(t.url)}">${esc(t.doc.title || t.url.split('/').pop())}</button>`).join('')
     : '<p class="muted" style="padding:4px 0">No other list. Create one first.</p>'}</div>`
   document.body.appendChild(ov)
-  ov.onclick = (e) => { if (e.target === ov) ov.remove() }
-  ov.querySelectorAll('.move-opt').forEach((b) => { b.onclick = () => { ov.remove(); moveItem(item, b.dataset.url) } })
+  const close = () => { ov.remove(); document.removeEventListener('keydown', onKey) }
+  const onKey = (e) => { if (e.key === 'Escape') close() }
+  document.addEventListener('keydown', onKey)
+  ov.onclick = (e) => { if (e.target === ov) close() }
+  ov.querySelectorAll('.move-opt').forEach((b) => { b.onclick = () => { close(); moveItem(item, b.dataset.url) } })
+  const first = ov.querySelector('.move-opt'); if (first) first.focus()
 }
 async function moveItem(item, targetUrl) {
   try {
-    DOC.issue = issuesOf(DOC).filter((x) => x['@id'] !== item['@id'])
-    await saveDoc(OPEN, DOC)
+    // Add to the target FIRST, then remove from the source — a failure midway
+    // can only duplicate the task, never lose it.
     const tdoc = await loadDoc(targetUrl)
-    if (!tdoc) throw new Error('target not found')
+    if (!tdoc) throw new Error('target list not found')
     tdoc.issue = [...issuesOf(tdoc), { ...item, modified: nowIso() }]
     await saveDoc(targetUrl, tdoc)
+    DOC.issue = issuesOf(DOC).filter((x) => x['@id'] !== item['@id'])
+    await saveDoc(OPEN, DOC)
     const tc = ALL.find((t) => t.url === targetUrl); if (tc) tc.doc = tdoc
     const cc = ALL.find((t) => t.url === OPEN); if (cc) cc.doc = DOC
     toast('moved'); renderTasks()
-  } catch (e) { toast(String(e.message || e)); DOC = await loadDoc(OPEN); renderTasks() }
+  } catch (e) { toast(String(e.message || e)); DOC = (await loadDoc(OPEN).catch(() => null)) || DOC; renderTasks() }
 }
 
 // --- live updates: Solid WebSocket notifications (solid-0.1) ----------------
